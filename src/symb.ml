@@ -136,8 +136,28 @@ let rec tactic (idents : Names.Id.t List.t) : unit Proofview.tactic =
                   (Induction.destruct false None (EConstr.of_constr struct_arg) None None)
                   (tactic idents)*)
 
+                (*
+                induction_destruct : 
+                  Tactics.rec_flag -> 
+                  Tactics.evars_flag -> 
+                    (
+                      (Tactypes.delayed_open_constr_with_bindings Tactics.destruction_arg * 
+                        (Tactypes.intro_pattern_naming option * Tactypes.or_and_intro_pattern option) * 
+                      Locus.clause option) list * 
+                    EConstr.constr Tactypes.with_bindings option) -> 
+                  unit Proofview.tactic
+                *)
+
                 Tacticals.tclTHEN
-                  (Induction.destruct false None (EConstr.of_constr struct_arg) None None)
+                  (Induction.induction_destruct 
+                    false (* no induction *)
+                    false (* evars flags*) 
+                    ([ ((None, (* to fill this it's easier to use a name, ElimOnIdent, and we decided 
+                    that argumnets to fucntins would be replaced with names! use letin_pat_tac for remember *)
+                        Tactics.ElimOnConstr (_)), (* destruction arg *)
+                        CAst.make (Namegen.IntroFresh (Names.Id.of_string ("Heqn"))),
+                        None) (* eqn: *)
+                    ], None))
                   (tactic idents)
     
 
