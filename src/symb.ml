@@ -4,7 +4,27 @@ let is_eq (f: Constr.t) : bool =
   | Constr.Ind ((mutind, _), _) -> 
       String.equal (Names.MutInd.to_string mutind) "Coq.Init.Logic.eq"
   | _ -> false
-  
+
+let is_eq_app (t: Constr.t) : bool =
+  match Constr.kind t with
+  | Constr.App (f, args) -> is_eq f
+  | _ -> false
+
+let hyp_is_eq_app (gl: Proofview.Goal.t) 
+                  (ident: Names.Id.t) : bool =
+  let env = Proofview.Goal.env gl in
+  match EConstr.lookup_named ident env with
+  | Context.Named.Declaration.LocalAssum (_, ty) ->
+    let sigma = Proofview.Goal.sigma gl in
+    is_eq_app (EConstr.to_constr sigma ty)
+  | _ -> false
+
+
+let cat = CWarnings.create_category ~name:"plugin-symb" ()
+
+let _warn (s: string) = CWarnings.create ~name:(Printf.sprintf "%d" (Random.int 1000000))  ~category:cat
+                              (fun _ -> Pp.strbrk s) ()
+
 let extract_eq_args (ident: Names.Id.t) (gl: Proofview.Goal.t) : Constr.t * Constr.t =
   let env = Proofview.Goal.env gl in
     match EConstr.lookup_named ident env with
@@ -94,6 +114,21 @@ let rec get_constructor (c: Constr.t) : (Names.MutInd.t * int) option =
     end
   | _ -> None
 
+let destruct_tactic (arg : EConstr.t) (name_eqn: string) : unit Proofview.tactic =
+  (Induction.induction_destruct 
+    false (* no induction *)
+    false (* evars flags*) 
+    ([ (( None,
+          Tactics.ElimOnConstr 
+          (fun env evar -> (evar, (arg, Tactypes.NoBindings)))), (* destruction arg *)
+        ( Some (CAst.make (Namegen.IntroFresh (Names.Id.of_string name_eqn))),
+          None),
+        None)
+    ], None))
+
+let get_hyps_names (goal: Proofview.Goal.t) : Names.Id.t List.t =
+  List.map Context.Named.Declaration.get_id (Proofview.Goal.hyps goal)
+
 let rec tactic (idents : Names.Id.t List.t) : unit Proofview.tactic = 
   match idents with
   | [] -> Tacticals.tclIDTAC
@@ -117,53 +152,47 @@ let rec tactic (idents : Names.Id.t List.t) : unit Proofview.tactic =
             | Constr.Var id -> 
                 (* unfold variable and rerun *)
                 Tacticals.tclTHEN 
-                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, (*Evaluable*)Tacred.EvalVarRef id)] (h, Locus.InHyp))
+                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, Evaluable(*Tacred*).EvalVarRef id)] (h, Locus.InHyp))
                   (tactic idents)
 
             | Constr.Const (name, _) -> 
                 (* unfold constant and rerun *)
                 Tacticals.tclTHEN 
-                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, (*Evaluable*)Tacred.EvalConstRef name)] (h, Locus.InHyp))
+                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, Evaluable(*Tacred*).EvalConstRef name)] (h, Locus.InHyp))
                   (tactic idents)
             
             | Constr.Fix ((skips, index), _) -> 
                 (* the index of the structural argument *)
                 let struct_ind : int = Array.get skips index in
+                
                 (* the structural argument *)
                 let struct_arg : Constr.t = Array.get args struct_ind in 
-                (* destruct the struct arg of fixpoint to keep reducing *)
-                (*Tacticals.tclTHEN
-                  (Induction.destruct false None (EConstr.of_constr struct_arg) None None)
-                  (tactic idents)*)
-
-                (*
-                induction_destruct : 
-                  Tactics.rec_flag -> 
-                  Tactics.evars_flag -> 
-                    (
-                      (Tactypes.delayed_open_constr_with_bindings Tactics.destruction_arg * 
-                        (Tactypes.intro_pattern_naming option * Tactypes.or_and_intro_pattern option) * 
-                      Locus.clause option) list * 
-                    EConstr.constr Tactypes.with_bindings option) -> 
-                  unit Proofview.tactic
-                *)
-
-                Tacticals.tclTHEN
-                  (Induction.induction_destruct 
-                    false (* no induction *)
-                    false (* evars flags*) 
-                    ([ ((None, (* to fill this it's easier to use a name, ElimOnIdent, and we decided 
-                    that argumnets to fucntins would be replaced with names! use letin_pat_tac for remember *)
-                        Tactics.ElimOnConstr (_)), (* destruction arg *)
-                        CAst.make (Namegen.IntroFresh (Names.Id.of_string ("Heqn"))),
-                        None) (* eqn: *)
-                    ], None))
-                  (tactic idents)
-    
+                
+                (* destruct the structural argument *)
+                recurse_after
+                  gl
+                  (destruct_tactic (EConstr.of_constr struct_arg) "Heqn")
+                  idents
 
             | _ -> CErrors.user_err (Pp.str ("not supported3" ^ (c2str f)))
             end
-          | _ -> CErrors.user_err (Pp.str (c2str arg1))
+          | Constr.Var id -> Tacticals.tclIDTAC (* FIXME: occurs when we have l = ?; l is a variable; check if it is assigned before *)
+          | _ -> CErrors.user_err (Pp.str ("not supported4" ^ (c2str arg1)))
           end
       end
     end
+and recurse_after (goal: Proofview.Goal.t)
+                  (first: unit Proofview.tactic) 
+                  (idents: Names.Id.t List.t) : unit Proofview.tactic =
+  let old_hyps_names = get_hyps_names goal in
+  Tacticals.tclTHEN
+    first
+    (Proofview.Goal.enter 
+      (fun gl -> 
+        let new_hyps_names = get_hyps_names gl in
+        let fresh_new_hyps = 
+          List.filter 
+            (fun nm -> not (List.mem nm old_hyps_names) && (hyp_is_eq_app gl nm))
+            new_hyps_names in
+        let _ = List.iter (fun m -> _warn (Names.Id.to_string m)) fresh_new_hyps in
+        tactic (fresh_new_hyps @ idents))) 

@@ -38,7 +38,9 @@ Proof.
 
 Goal forall (l : list nat), rev l = [1; 2; 3] -> l = [3; 2; 1].
 Proof.
-  intros l Hrev. symb Hrev. symb H1. destruct n1 eqn:?, n0 eqn:?. symb H3.
+  intros l Hrev. symb Hrev. symb Hrev.
+  - symb Heqn2. symb H1. subst. 
+  - symb H1.
   - 
   
 
