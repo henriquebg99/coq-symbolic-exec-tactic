@@ -141,7 +141,7 @@ let rec tactic (idents : Names.Id.t List.t) : unit Proofview.tactic =
         match get_constructor arg1, get_constructor arg2 with
         | Some (mi, i), Some(mi', i') -> 
             if i == i' then
-              Inv.inv_tac h (* TODO should inspect the new hypothesis *)
+              recurse_after gl (Inv.inv_tac h) idents
             else
               Equality.discrHyp h
         | _, _ ->
@@ -152,13 +152,13 @@ let rec tactic (idents : Names.Id.t List.t) : unit Proofview.tactic =
             | Constr.Var id -> 
                 (* unfold variable and rerun *)
                 Tacticals.tclTHEN 
-                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, Evaluable(*Tacred*).EvalVarRef id)] (h, Locus.InHyp))
+                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, (*Evaluable*)Tacred.EvalVarRef id)] (h, Locus.InHyp))
                   (tactic idents)
 
             | Constr.Const (name, _) -> 
                 (* unfold constant and rerun *)
                 Tacticals.tclTHEN 
-                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, Evaluable(*Tacred*).EvalConstRef name)] (h, Locus.InHyp))
+                  (Tactics.unfold_in_hyp [(Locus.AllOccurrences, (*Evaluable*)Tacred.EvalConstRef name)] (h, Locus.InHyp))
                   (tactic idents)
             
             | Constr.Fix ((skips, index), _) -> 
